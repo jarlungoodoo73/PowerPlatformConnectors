@@ -50,10 +50,11 @@ RUN echo "**** aws ssm ****" && \
     curl -v -f "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" \
          -o "/tmp/session-manager-plugin.deb" && \
     ls -lh "/tmp/session-manager-plugin.deb" && \
-    sudo dpkg -i "/tmp/session-manager-plugin.deb" || \
-    (echo "dpkg failed, checking logs:" && cat /var/log/dpkg.log && exit 1) && \
+    (sudo dpkg -i "/tmp/session-manager-plugin.deb" || \
+     (echo "dpkg failed, checking logs:" && cat /var/log/dpkg.log && false)) && \
     rm -rf "/tmp/aws" "/tmp/session-manager-plugin.deb"
 ```
+Note: This approach preserves temporary files on failure for debugging. For production, ensure cleanup always runs using a trap or separate cleanup step.
 
 ### Fix 2: Install Dependencies First
 ```dockerfile
@@ -65,21 +66,24 @@ RUN apt-get update && \
 RUN echo "**** aws ssm ****" && \
     curl -f "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" \
          -o "/tmp/session-manager-plugin.deb" && \
-    sudo dpkg -i "/tmp/session-manager-plugin.deb" || \
-    sudo apt-get install -f -y && \
+    (sudo dpkg -i "/tmp/session-manager-plugin.deb" || \
+     (sudo apt-get install -f -y && sudo dpkg -i "/tmp/session-manager-plugin.deb")) && \
     rm -rf "/tmp/aws" "/tmp/session-manager-plugin.deb"
 ```
+Note: This fix attempts to install dependencies if dpkg fails, then retries the installation.
 
-### Fix 3: Use Alternative Installation Method
+### Fix 3: Add Retry Logic and Better Error Handling
 ```dockerfile
-# Use snap instead of deb package (if applicable)
 RUN echo "**** aws ssm ****" && \
-    snap install amazon-ssm-agent --classic || \
-    (curl -f "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" \
-         -o "/tmp/session-manager-plugin.deb" && \
-     sudo dpkg -i "/tmp/session-manager-plugin.deb" && \
-     rm -rf "/tmp/session-manager-plugin.deb")
+    for i in 1 2 3; do \
+        curl -f "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" \
+             -o "/tmp/session-manager-plugin.deb" && break || sleep 5; \
+    done && \
+    test -f "/tmp/session-manager-plugin.deb" && \
+    sudo dpkg -i "/tmp/session-manager-plugin.deb" && \
+    rm -rf "/tmp/aws" "/tmp/session-manager-plugin.deb"
 ```
+Note: This adds retry logic for the download which can help with transient network issues.
 
 ### Fix 4: Pin to Specific Version
 Instead of using `/latest/`, pin to a specific known-working version:
